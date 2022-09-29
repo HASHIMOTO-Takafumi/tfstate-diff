@@ -1,0 +1,8 @@
+ignore_diff:
+  - left: "stg"
+    right: "prod"
+  - left: ""
+    right: "prod-"
+  - left: ""
+    right: "prod/"
+  

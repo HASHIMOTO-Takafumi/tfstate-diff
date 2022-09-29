@@ -8,7 +8,17 @@ import (
 	"strings"
 
 	"github.com/wI2L/jsondiff"
+	"gopkg.in/yaml.v2"
 )
+
+type Config struct {
+	IgnoreDiff []ConfigIgnoreDiff `yaml:"ignore_diff"`
+}
+
+type ConfigIgnoreDiff struct {
+	Left  string `yaml:"left"`
+	Right string `yaml:"right"`
+}
 
 type TfProvidersSchema struct {
 	FormatVersion  string                      `json:"format_version"`
@@ -36,21 +46,32 @@ type TfSchemaAttribute struct {
 }
 
 type Comparer struct {
-	ps TfProvidersSchema
+	config Config
+	ps     TfProvidersSchema
 }
 
-func New(providersSchemaPath string) Comparer {
-	bytes, err := ioutil.ReadFile(providersSchemaPath)
+func New(configPath string, providersSchemaPath string) Comparer {
+	c := Config{}
+	bytes, err := ioutil.ReadFile(configPath)
 	if err != nil {
 		panic(err)
 	}
-	var data TfProvidersSchema
-	if err = json.Unmarshal(bytes, &data); err != nil {
+	if err = yaml.Unmarshal(bytes, &c); err != nil {
+		panic(err)
+	}
+
+	bytes, err = ioutil.ReadFile(providersSchemaPath)
+	if err != nil {
+		panic(err)
+	}
+	var ps TfProvidersSchema
+	if err = json.Unmarshal(bytes, &ps); err != nil {
 		panic(err)
 	}
 
 	return Comparer{
-		ps: data,
+		config: c,
+		ps:     ps,
 	}
 }
 
@@ -215,7 +236,7 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 					effectiveDiffCount := 0
 					for k := range p {
 						path := p[k].Path.String()
-						if strings.HasPrefix(path, "/tags/") || strings.HasPrefix(path, "/tags_all/") {
+						if c.isIgnorable(p[k]) {
 							continue
 						}
 						sa := findSchemaAttribute(s, path[1:])
@@ -256,6 +277,42 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 	fmt.Printf("with diff: %d\n", resourceWithDiffCount)
 	fmt.Printf("left only resources: %d\n", len(aNotFound))
 	fmt.Printf("right only resources: %d\n", len(b)-len(bFound))
+}
+
+func (c Comparer) isIgnorable(op jsondiff.Operation) bool {
+	path := op.Path.String()
+
+	if strings.HasPrefix(path, "/tags/") || strings.HasPrefix(path, "/tags_all/") {
+		return true
+	}
+
+	old, ok := op.OldValue.(string)
+	if !ok {
+		return false
+	}
+	new, ok := op.Value.(string)
+	if !ok {
+		return false
+	}
+
+	i, j := 0, 0
+outer:
+	for i < len(old) && j < len(new) {
+		for k := range c.config.IgnoreDiff {
+			ignore := c.config.IgnoreDiff[k]
+			if strings.HasPrefix(old[i:], ignore.Left) && strings.HasPrefix(new[j:], ignore.Right) {
+				i += len(ignore.Left)
+				j += len(ignore.Right)
+				continue outer
+			}
+		}
+		if old[i] != new[j] {
+			return false
+		}
+		i, j = i+1, j+1
+	}
+
+	return i == len(old) && j == len(new)
 }
 
 func (c Comparer) findSchema(r TfResource) TfSchema {

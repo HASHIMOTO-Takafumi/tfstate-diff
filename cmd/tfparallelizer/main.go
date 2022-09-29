@@ -10,16 +10,17 @@ import (
 func main() {
 	flag.Parse()
 
-	var s = flag.Arg(0)
-	var a = flag.Arg(1)
-	var b = flag.Arg(2)
+	var c = flag.Arg(0)
+	var s = flag.Arg(1)
+	var a = flag.Arg(2)
+	var b = flag.Arg(3)
 
 	if b == "" {
-		fmt.Printf("3 arguments required")
+		fmt.Printf("4 arguments required")
 		return
 	}
 
-	comparer := internal.New(s)
+	comparer := internal.New(c, s)
 
 	comparer.Compare(a, b)
 }
