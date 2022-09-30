@@ -239,8 +239,7 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 						if c.isIgnorable(p[k]) {
 							continue
 						}
-						sa := findSchemaAttribute(s, path[1:])
-						if !sa.Computed {
+						if isArgument(s, path[1:]) {
 							fmt.Printf("  %s : %#v -> %#v\n", path, p[k].OldValue, p[k].Value)
 							effectiveDiffCount++
 						}
@@ -329,12 +328,29 @@ func (c Comparer) findSchema(r TfResource) TfSchema {
 	panic(fmt.Errorf("schema not found: %s (%#v)", r.Address, r))
 }
 
-func findSchemaAttribute(s TfSchema, path string) TfSchemaAttribute {
+func isArgument(s TfSchema, path string) bool {
 	i := strings.Index(path, "/")
+
+	var p string
 	if i < 0 {
-		return s.Block.Attributes[path]
+		p = path
+	} else {
+		p = path[:i]
 	}
-	return findSchemaAttribute(s.Block.BlockTypes[path[0:i]], path[i+1:])
+
+	if a, ok := s.Block.Attributes[p]; ok {
+		return !a.Computed || a.Optional
+	}
+
+	if a, ok := s.Block.BlockTypes[p]; ok {
+		j := strings.Index(path[i+1:], "/")
+		if j < 0 {
+			// schema with sub-blocks should be a manual argument
+			return true
+		}
+		return isArgument(a, path[i+1+j+1:])
+	}
+	panic(fmt.Errorf("schema attribute not found: %s", p))
 }
 
 func addressNormalize(address string) string {
