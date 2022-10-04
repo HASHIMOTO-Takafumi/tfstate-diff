@@ -3,6 +3,7 @@ module github.com/HASHIMOTO-Takafumi/tfparallelizer
 go 1.19
 
 require (
+	github.com/koron/go-dproxy v1.3.0
 	github.com/wI2L/jsondiff v0.2.0
 	gopkg.in/yaml.v2 v2.4.0
 )

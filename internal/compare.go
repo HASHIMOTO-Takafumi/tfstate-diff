@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/koron/go-dproxy"
 	"github.com/wI2L/jsondiff"
 	"gopkg.in/yaml.v2"
 )
@@ -109,24 +110,7 @@ func (c Comparer) Compare(a string, b string) {
 }
 
 func normalize(rs []TfResource) []TfResource {
-	address_by_arn := map[string]string{}
-
-	for i := range rs {
-		r := rs[i]
-		if val, ok := r.Values["arn"]; ok {
-			if arn, ok := val.(string); ok {
-				address_by_arn[arn] = addressNormalize(r.Address)
-			} else {
-				fmt.Printf("[warn] %s.arn should be string\n", r.Address)
-			}
-		} else if val, ok := r.Values["iam_arn"]; ok {
-			if arn, ok := val.(string); ok {
-				address_by_arn[arn] = addressNormalize(r.Address)
-			} else {
-				fmt.Printf("[warn] %s.iam_arn should be string\n", r.Address)
-			}
-		}
-	}
+	address_by_id := collectAddresses(rs)
 
 	normalizedResources := make([]TfResource, len(rs))
 
@@ -135,10 +119,8 @@ func normalize(rs []TfResource) []TfResource {
 
 		values := replaceJsonMap("", r.Values, func(key string, value string) string {
 			normalized := value
-			if key != "arn" && key != "iam_arn" {
-				if a, ok := address_by_arn[value]; ok {
-					normalized = a
-				}
+			if a, ok := address_by_id[value]; ok && a != addressNormalize(r.Address) {
+				normalized = a
 			}
 			return normalized
 		})
@@ -154,6 +136,99 @@ func normalize(rs []TfResource) []TfResource {
 	}
 
 	return normalizedResources
+}
+
+type idSource struct {
+	resourceType string
+	idAttribute  string
+}
+
+func collectAddresses(rs []TfResource) map[string]string {
+	d := map[string]string{}
+
+	arn_names := []string{
+		"arn",
+		"iam_arn",
+	}
+
+	for i := range rs {
+		r := rs[i]
+		for j := range arn_names {
+			if val, ok := r.Values[arn_names[j]]; ok {
+				if arn, ok := val.(string); ok {
+					d[arn] = addressNormalize(r.Address)
+				} else {
+					fmt.Printf("[warn] %s.%s should be string\n", r.Address, arn_names[j])
+				}
+			}
+		}
+	}
+
+	id_sources := []idSource{
+		{
+			resourceType: "aws_db_subnet_group",
+			idAttribute:  "subnet_ids",
+		},
+		{
+			resourceType: "aws_security_group",
+			idAttribute:  "id",
+		},
+		{
+			resourceType: "aws_efs_file_system",
+			idAttribute:  "id",
+		},
+		{
+			resourceType: "aws_vpc",
+			idAttribute:  "id",
+		},
+		{
+			resourceType: "aws_vpc_endpoint",
+			idAttribute:  "id",
+		},
+		{
+			resourceType: "aws_service_discovery_private_dns_namespace",
+			idAttribute:  "id",
+		},
+		{
+			resourceType: "aws_kms_key",
+			idAttribute:  "key_id",
+		},
+		{
+			resourceType: "aws_efs_file_system",
+			idAttribute:  "id",
+		},
+		{
+			resourceType: "aws_route_table",
+			idAttribute:  "id",
+		},
+	}
+
+	for i := range rs {
+		r := rs[i]
+		for j := range id_sources {
+			if r.Type != id_sources[j].resourceType {
+				continue
+			}
+			attr := id_sources[j].idAttribute
+			if val, ok := r.Values[attr]; ok {
+				if id, ok := val.(string); ok {
+					d[id] = fmt.Sprintf("%s.%s", addressNormalize(r.Address), attr)
+				} else if ids, ok := val.([]any); ok {
+					for k := range ids {
+						if id, ok := ids[k].(string); ok {
+							d[id] = fmt.Sprintf("%s.%s.%d", addressNormalize(r.Address), attr, j)
+						} else {
+							fmt.Printf("[warn] %s.%s.%d should be string\n", r.Address, attr, j)
+						}
+					}
+				} else {
+					fmt.Printf("[warn] %s.%s should be string\n", r.Address, attr)
+				}
+			}
+		}
+	}
+
+	return d
 }
 
 type jsonStringReplacer func(key string, value string) string
@@ -230,17 +305,21 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 		for j := range b {
 			if addressNormalize(a[i].Address) == addressNormalize(b[j].Address) {
 				s := c.findSchema(a[i])
-				p := compareJsons(a[i].Values, b[j].Values)
+				patch := compareJsons(a[i].Values, b[j].Values)
 				fmt.Printf("\ncompare %s\n", a[i].Address)
-				if p != nil {
+				if patch != nil {
 					effectiveDiffCount := 0
-					for k := range p {
-						path := p[k].Path.String()
-						if c.isIgnorable(p[k]) {
+					for k := range patch {
+						path := patch[k].Path.String()
+						if c.isIgnorable(patch[k]) {
 							continue
 						}
 						if isArgument(s, path[1:]) {
-							fmt.Printf("  %s : %#v -> %#v\n", path, p[k].OldValue, p[k].Value)
+							if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") {
+								c.comparePolicy(path, a[i], b[j])
+							} else {
+								fmt.Printf("  %s : %#v -> %#v\n", path, patch[k].OldValue, patch[k].Value)
+							}
 							effectiveDiffCount++
 						}
 					}
@@ -276,6 +355,41 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 	fmt.Printf("with diff: %d\n", resourceWithDiffCount)
 	fmt.Printf("left only resources: %d\n", len(aNotFound))
 	fmt.Printf("right only resources: %d\n", len(b)-len(bFound))
+}
+
+func (c Comparer) comparePolicy(path string, a TfResource, b TfResource) {
+	v, err := dproxy.Pointer(a.Values, path).String()
+	if err != nil {
+		panic(err)
+	}
+	if v == "" {
+		v = "{}"
+	}
+
+	w, err := dproxy.Pointer(b.Values, path).String()
+	if err != nil {
+		panic(err)
+	}
+	if w == "" {
+		w = "{}"
+	}
+
+	fmt.Printf("  compare %s:\n", path)
+
+	patch, err := jsondiff.CompareJSON([]byte(v), []byte(w))
+	if err != nil {
+		panic(err)
+	}
+
+	for i := range patch {
+		path := patch[i].Path.String()
+
+		if c.isIgnorable(patch[i]) {
+			continue
+		}
+
+		fmt.Printf("    %s : %#v -> %#v\n", path, patch[i].OldValue, patch[i].Value)
+	}
 }
 
 func (c Comparer) isIgnorable(op jsondiff.Operation) bool {
@@ -339,6 +453,10 @@ func isArgument(s TfSchema, path string) bool {
 	}
 
 	if a, ok := s.Block.Attributes[p]; ok {
+		if p == "id" {
+			// exception for id
+			return !a.Computed
+		}
 		return !a.Computed || a.Optional
 	}
 
