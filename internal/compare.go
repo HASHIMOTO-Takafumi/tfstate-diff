@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
-	"reflect"
 	"strings"
 
 	"github.com/koron/go-dproxy"
@@ -49,6 +48,8 @@ type TfSchemaAttribute struct {
 type Comparer struct {
 	config Config
 	ps     TfProvidersSchema
+	nA     normalizer
+	nB     normalizer
 }
 
 func New(configPath string, providersSchemaPath string) Comparer {
@@ -103,27 +104,21 @@ type TfResource struct {
 func (c Comparer) Compare(a string, b string) {
 	stateA := loadJson(a)
 	stateB := loadJson(b)
-	normalizedA := normalize(stateA.Values.RootModule.Resources)
-	normalizedB := normalize(stateB.Values.RootModule.Resources)
+	c.nA = newNormalizer(stateA.Values.RootModule.Resources)
+	c.nB = newNormalizer(stateB.Values.RootModule.Resources)
+	normalizedA := normalizeResource(c.nA, stateA.Values.RootModule.Resources)
+	normalizedB := normalizeResource(c.nB, stateB.Values.RootModule.Resources)
 
 	c.compareResources(normalizedA, normalizedB)
 }
 
-func normalize(rs []TfResource) []TfResource {
-	address_by_id := collectAddresses(rs)
-
+func normalizeResource(n normalizer, rs []TfResource) []TfResource {
 	normalizedResources := make([]TfResource, len(rs))
 
 	for i := range rs {
 		r := rs[i]
 
-		values := replaceJsonMap("", r.Values, func(key string, value string) string {
-			normalized := value
-			if a, ok := address_by_id[value]; ok && a != addressNormalize(r.Address) {
-				normalized = a
-			}
-			return normalized
-		})
+		values := n.normalize(r.Values)
 
 		normalizedResources[i] = TfResource{
 			Address:      r.Address,
@@ -136,162 +131,6 @@ func normalize(rs []TfResource) []TfResource {
 	}
 
 	return normalizedResources
-}
-
-type idSource struct {
-	resourceType string
-	idAttribute  string
-}
-
-func collectAddresses(rs []TfResource) map[string]string {
-	d := map[string]string{}
-
-	arn_names := []string{
-		"arn",
-		"iam_arn",
-	}
-
-	for i := range rs {
-		r := rs[i]
-		for j := range arn_names {
-			if val, ok := r.Values[arn_names[j]]; ok {
-				if arn, ok := val.(string); ok {
-					d[arn] = addressNormalize(r.Address)
-				} else {
-					fmt.Printf("[warn] %s.%s should be string\n", r.Address, arn_names[j])
-				}
-			}
-		}
-	}
-
-	id_sources := []idSource{
-		{
-			resourceType: "aws_db_subnet_group",
-			idAttribute:  "subnet_ids",
-		},
-		{
-			resourceType: "aws_security_group",
-			idAttribute:  "id",
-		},
-		{
-			resourceType: "aws_efs_file_system",
-			idAttribute:  "id",
-		},
-		{
-			resourceType: "aws_vpc",
-			idAttribute:  "id",
-		},
-		{
-			resourceType: "aws_vpc_endpoint",
-			idAttribute:  "id",
-		},
-		{
-			resourceType: "aws_service_discovery_private_dns_namespace",
-			idAttribute:  "id",
-		},
-		{
-			resourceType: "aws_kms_key",
-			idAttribute:  "key_id",
-		},
-		{
-			resourceType: "aws_efs_file_system",
-			idAttribute:  "id",
-		},
-		{
-			resourceType: "aws_route_table",
-			idAttribute:  "id",
-		},
-	}
-
-	for i := range rs {
-		r := rs[i]
-		for j := range id_sources {
-			if r.Type != id_sources[j].resourceType {
-				continue
-			}
-			attr := id_sources[j].idAttribute
-			if val, ok := r.Values[attr]; ok {
-				if id, ok := val.(string); ok {
-					d[id] = fmt.Sprintf("%s.%s", addressNormalize(r.Address), attr)
-				} else if ids, ok := val.([]any); ok {
-					for k := range ids {
-						if id, ok := ids[k].(string); ok {
-							d[id] = fmt.Sprintf("%s.%s.%d", addressNormalize(r.Address), attr, j)
-						} else {
-							fmt.Printf("[warn] %s.%s.%d should be string\n", r.Address, attr, j)
-						}
-					}
-				} else {
-					fmt.Printf("[warn] %s.%s should be string\n", r.Address, attr)
-				}
-			}
-		}
-	}
-
-	return d
-}
-
-type jsonStringReplacer func(key string, value string) string
-
-func replaceJsonMap(prefix string, d map[string]any, fn jsonStringReplacer) map[string]any {
-	res := map[string]any{}
-
-	for i := range d {
-		var p string
-		if prefix == "" {
-			p = i
-		} else {
-			p = fmt.Sprintf("%s.%s", prefix, i)
-		}
-		if val, ok := d[i].(string); ok {
-			res[i] = fn(p, val)
-		} else if val, ok := d[i].(map[string]any); ok {
-			res[i] = replaceJsonMap(p, val, fn)
-		} else if val, ok := d[i].([]any); ok {
-			res[i] = replaceJsonSlice(p, val, fn)
-		} else {
-			res[i] = replaceJsonScalar(p, val, fn)
-		}
-	}
-
-	return res
-}
-
-func replaceJsonSlice(prefix string, s []any, fn jsonStringReplacer) []any {
-	res := make([]any, len(s))
-
-	for i := range s {
-		var p string
-		if prefix == "" {
-			p = fmt.Sprintf("%d", i)
-		} else {
-			p = fmt.Sprintf("%s.%d", prefix, i)
-		}
-		if val, ok := s[i].(string); ok {
-			res[i] = fn(p, val)
-		} else if val, ok := s[i].(map[string]any); ok {
-			res[i] = replaceJsonMap(p, val, fn)
-		} else if val, ok := s[i].([]any); ok {
-			res[i] = replaceJsonSlice(p, val, fn)
-		} else {
-			res[i] = replaceJsonScalar(p, val, fn)
-		}
-	}
-
-	return res
-}
-
-func replaceJsonScalar(prefix string, v any, fn jsonStringReplacer) any {
-	t := reflect.TypeOf(v)
-	if t == nil || reflect.ValueOf(v).IsNil() {
-		return nil
-	}
-	k := t.Kind()
-	if k == reflect.Int || k == reflect.Float64 {
-		return v
-	}
-	fmt.Printf("[warn] unknown type: %s %#v\n", prefix, v)
-	return v
 }
 
 func (c Comparer) compareResources(a []TfResource, b []TfResource) {
@@ -358,6 +197,8 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 }
 
 func (c Comparer) comparePolicy(path string, a TfResource, b TfResource) {
+	fmt.Printf("  compare %s:\n", path)
+
 	v, err := dproxy.Pointer(a.Values, path).String()
 	if err != nil {
 		panic(err)
@@ -374,9 +215,22 @@ func (c Comparer) comparePolicy(path string, a TfResource, b TfResource) {
 		w = "{}"
 	}
 
-	fmt.Printf("  compare %s:\n", path)
+	var dataA map[string]any
+	err = json.Unmarshal([]byte(v), &dataA)
+	if err != nil {
+		panic(err)
+	}
 
-	patch, err := jsondiff.CompareJSON([]byte(v), []byte(w))
+	var dataB map[string]any
+	err = json.Unmarshal([]byte(w), &dataB)
+	if err != nil {
+		panic(err)
+	}
+
+	dataA = c.nA.normalize(dataA)
+	dataB = c.nB.normalize(dataB)
+
+	patch, err := jsondiff.Compare(dataA, dataB)
 	if err != nil {
 		panic(err)
 	}
