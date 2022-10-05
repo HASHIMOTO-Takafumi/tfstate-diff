@@ -476,9 +476,17 @@ func addressNormalize(address string) string {
 }
 
 func loadJson(path string) TfState {
-	bytes, _ := ioutil.ReadFile(path)
+	bytes, err := ioutil.ReadFile(path)
+	if err != nil {
+		panic(err)
+	}
+
 	var data TfState
-	_ = json.Unmarshal(bytes, &data)
+	err = json.Unmarshal(bytes, &data)
+	if err != nil {
+		panic(err)
+	}
+
 	return data
 }
 
