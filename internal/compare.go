@@ -32,6 +32,9 @@ type TfProviderSchema struct {
 
 type TfSchema struct {
 	Block TfSchemaBlock `json:"block"`
+
+	// only for block_types
+	NestingMode string `json:"nesting_mode,omitempty"`
 }
 
 type TfSchemaBlock struct {
@@ -40,6 +43,7 @@ type TfSchemaBlock struct {
 }
 
 type TfSchemaAttribute struct {
+	Type     any  `json:"type"` // string or []string
 	Required bool `json:"required"`
 	Optional bool `json:"optional"`
 	Computed bool `json:"computed"`
@@ -48,8 +52,9 @@ type TfSchemaAttribute struct {
 type Comparer struct {
 	config Config
 	ps     TfProvidersSchema
-	nA     normalizer
-	nB     normalizer
+	inA    idNormalizer
+	inB    idNormalizer
+	sn     schematicNormalizer
 }
 
 func New(configPath string, providersSchemaPath string) Comparer {
@@ -71,9 +76,12 @@ func New(configPath string, providersSchemaPath string) Comparer {
 		panic(err)
 	}
 
+	sn := newSchematicNormalizer(c.IgnoreDiff, ps)
+
 	return Comparer{
 		config: c,
 		ps:     ps,
+		sn:     sn,
 	}
 }
 
@@ -104,23 +112,23 @@ type TfResource struct {
 func (c Comparer) Compare(a string, b string) {
 	stateA := loadJson(a)
 	stateB := loadJson(b)
-	c.nA = newNormalizer(stateA.Values.RootModule.Resources)
-	c.nB = newNormalizer(stateB.Values.RootModule.Resources)
-	normalizedA := normalizeResource(c.nA, stateA.Values.RootModule.Resources)
-	normalizedB := normalizeResource(c.nB, stateB.Values.RootModule.Resources)
+	c.inA = newIdNormalizer(stateA.Values.RootModule.Resources)
+	c.inB = newIdNormalizer(stateB.Values.RootModule.Resources)
+	normalizedA := normalizeResource(c.inA, c.sn, stateA.Values.RootModule.Resources)
+	normalizedB := normalizeResource(c.inB, c.sn, stateB.Values.RootModule.Resources)
 
 	c.compareResources(normalizedA, normalizedB)
 }
 
-func normalizeResource(n normalizer, rs []TfResource) []TfResource {
+func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource) []TfResource {
 	normalizedResources := make([]TfResource, len(rs))
 
 	for i := range rs {
 		r := rs[i]
 
-		values := n.normalize(r.Values)
+		values := in.normalize(r.Values)
 
-		normalizedResources[i] = TfResource{
+		nr := TfResource{
 			Address:      r.Address,
 			Mode:         r.Mode,
 			Type:         r.Type,
@@ -128,6 +136,8 @@ func normalizeResource(n normalizer, rs []TfResource) []TfResource {
 			ProviderName: r.ProviderName,
 			Values:       values,
 		}
+
+		normalizedResources[i] = sn.normalize(nr)
 	}
 
 	return normalizedResources
@@ -143,9 +153,15 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 		found := false
 		for j := range b {
 			if addressNormalize(a[i].Address) == addressNormalize(b[j].Address) {
-				s := c.findSchema(a[i])
-				patch := compareJsons(a[i].Values, b[j].Values)
+				s := c.sn.findSchema(a[i])
+
+				patch, err := jsondiff.CompareOpts(a[i].Values, b[j].Values, jsondiff.Equivalent())
+				if err != nil {
+					panic(err)
+				}
+
 				fmt.Printf("\ncompare %s\n", a[i].Address)
+
 				if patch != nil {
 					effectiveDiffCount := 0
 					for k := range patch {
@@ -157,7 +173,7 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 							if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") {
 								c.comparePolicy(path, a[i], b[j])
 							} else {
-								fmt.Printf("  %s : %#v -> %#v\n", path, patch[k].OldValue, patch[k].Value)
+								fmt.Printf("  %s : %s -> %s\n", path, serialize(patch[k].OldValue), serialize(patch[k].Value))
 							}
 							effectiveDiffCount++
 						}
@@ -227,10 +243,10 @@ func (c Comparer) comparePolicy(path string, a TfResource, b TfResource) {
 		panic(err)
 	}
 
-	dataA = c.nA.normalize(dataA)
-	dataB = c.nB.normalize(dataB)
+	dataA = c.inA.normalize(dataA)
+	dataB = c.inB.normalize(dataB)
 
-	patch, err := jsondiff.Compare(dataA, dataB)
+	patch, err := jsondiff.CompareOpts(dataA, dataB, jsondiff.Equivalent())
 	if err != nil {
 		panic(err)
 	}
@@ -242,7 +258,7 @@ func (c Comparer) comparePolicy(path string, a TfResource, b TfResource) {
 			continue
 		}
 
-		fmt.Printf("    %s : %#v -> %#v\n", path, patch[i].OldValue, patch[i].Value)
+		fmt.Printf("    %s : %s -> %s\n", path, serialize(patch[i].OldValue), serialize(patch[i].Value))
 	}
 }
 
@@ -282,20 +298,6 @@ outer:
 	return i == len(old) && j == len(new)
 }
 
-func (c Comparer) findSchema(r TfResource) TfSchema {
-	ps := c.ps.ProviderSchema[r.ProviderName]
-	if r.Mode == "data" {
-		if s, ok := ps.DataSourceSchemas[r.Type]; ok {
-			return s
-		}
-		panic(fmt.Errorf("schema not found: %s (%s)", r.Address, r.Type))
-	}
-	if s, ok := ps.ResourceSchemas[r.Type]; ok {
-		return s
-	}
-	panic(fmt.Errorf("schema not found: %s (%#v)", r.Address, r))
-}
-
 func isArgument(s TfSchema, path string) bool {
 	i := strings.Index(path, "/")
 
@@ -322,11 +324,20 @@ func isArgument(s TfSchema, path string) bool {
 		}
 		return isArgument(a, path[i+1+j+1:])
 	}
-	panic(fmt.Errorf("schema attribute not found: %s", p))
+	panic(fmt.Errorf("schema attribute not found: %s", path))
 }
 
 func addressNormalize(address string) string {
 	return strings.ReplaceAll(address, "-", "_")
+}
+
+func serialize(val any) string {
+	s, err := json.Marshal(val)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(s)
 }
 
 func loadJson(path string) TfState {
@@ -342,12 +353,4 @@ func loadJson(path string) TfState {
 	}
 
 	return data
-}
-
-func compareJsons(a any, b any) jsondiff.Patch {
-	patch, err := jsondiff.Compare(a, b)
-	if err != nil {
-		panic(err)
-	}
-	return patch
 }

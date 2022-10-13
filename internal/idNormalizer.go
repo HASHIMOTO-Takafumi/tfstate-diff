@@ -5,17 +5,17 @@ import (
 	"reflect"
 )
 
-type normalizer struct {
+type idNormalizer struct {
 	address_by_id map[string]string
 }
 
-func newNormalizer(rs []TfResource) normalizer {
-	return normalizer{
+func newIdNormalizer(rs []TfResource) idNormalizer {
+	return idNormalizer{
 		address_by_id: collectAddresses(rs),
 	}
 }
 
-func (n normalizer) normalize(val map[string]any) map[string]any {
+func (n idNormalizer) normalize(val map[string]any) map[string]any {
 	return replaceJsonMap("", val, func(key string, value string) string {
 		normalized := value
 		if a, ok := n.address_by_id[value]; ok {
@@ -53,8 +53,8 @@ func collectAddresses(rs []TfResource) map[string]string {
 
 	id_sources := []idSource{
 		{
-			resourceType: "aws_db_subnet_group",
-			idAttribute:  "subnet_ids",
+			resourceType: "aws_subnet",
+			idAttribute:  "id",
 		},
 		{
 			resourceType: "aws_security_group",
