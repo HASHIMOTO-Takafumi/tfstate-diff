@@ -60,6 +60,14 @@ func (n schematicNormalizer) normalize(r TfResource) TfResource {
 			}
 			panic("invalid value with set type")
 		}
+
+		if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") || strings.HasSuffix(path, "/assume_role_policy") {
+			if val, ok := value.(string); ok {
+				return n.normalizePolicy(val)
+			}
+			panic("invalid type of policy value")
+		}
+
 		return value
 	})
 
@@ -71,6 +79,32 @@ func (n schematicNormalizer) normalize(r TfResource) TfResource {
 		ProviderName: r.ProviderName,
 		Values:       vs,
 	}
+}
+
+func (n schematicNormalizer) normalizePolicy(value string) string {
+	if value == "" {
+		return value
+	}
+
+	var data any
+	if err := json.Unmarshal([]byte(value), &data); err != nil {
+		panic(err)
+	}
+
+	result := jsonTransform(data, "", func(path string, val any) any {
+		if a, ok := val.([]any); ok {
+			return n.sort(a)
+		}
+		return val
+	})
+
+	var s []byte
+	s, err := json.Marshal(result)
+	if err != nil {
+		panic(err)
+	}
+
+	return string(s)
 }
 
 type sortable struct {

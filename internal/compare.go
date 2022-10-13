@@ -170,7 +170,7 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 							continue
 						}
 						if isArgument(s, path[1:]) {
-							if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") {
+							if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") || strings.HasSuffix(path, "/assume_role_policy") {
 								c.comparePolicy(path, a[i], b[j])
 							} else {
 								fmt.Printf("  %s : %s -> %s\n", path, serialize(patch[k].OldValue), serialize(patch[k].Value))
