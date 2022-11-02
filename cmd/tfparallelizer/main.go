@@ -14,6 +14,11 @@ func main() {
 	flag.Usage = usage
 	flag.Parse()
 
+	if flag.NArg() < 3 {
+		usage()
+		return
+	}
+
 	var s = flag.Arg(0)
 	var l = flag.Arg(1)
 	var r = flag.Arg(2)

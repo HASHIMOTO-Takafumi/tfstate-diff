@@ -59,15 +59,18 @@ type Comparer struct {
 
 func New(configPath string, providersSchemaPath string) Comparer {
 	c := Config{}
-	bytes, err := ioutil.ReadFile(configPath)
-	if err != nil {
-		panic(err)
-	}
-	if err = yaml.Unmarshal(bytes, &c); err != nil {
-		panic(err)
+
+	if configPath != "" {
+		bytes, err := ioutil.ReadFile(configPath)
+		if err != nil {
+			panic(err)
+		}
+		if err = yaml.Unmarshal(bytes, &c); err != nil {
+			panic(err)
+		}
 	}
 
-	bytes, err = ioutil.ReadFile(providersSchemaPath)
+	bytes, err := ioutil.ReadFile(providersSchemaPath)
 	if err != nil {
 		panic(err)
 	}
