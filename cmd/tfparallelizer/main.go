@@ -15,12 +15,12 @@ func main() {
 	flag.Parse()
 
 	var s = flag.Arg(0)
-	var a = flag.Arg(1)
-	var b = flag.Arg(2)
+	var l = flag.Arg(1)
+	var r = flag.Arg(2)
 
 	comparer := internal.New(*c, s)
 
-	comparer.Compare(a, b)
+	comparer.Compare(l, r)
 }
 
 func usage() {

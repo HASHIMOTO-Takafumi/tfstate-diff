@@ -52,8 +52,8 @@ type TfSchemaAttribute struct {
 type Comparer struct {
 	config Config
 	ps     TfProvidersSchema
-	inA    idNormalizer
-	inB    idNormalizer
+	inL    idNormalizer
+	inR    idNormalizer
 	sn     schematicNormalizer
 }
 
@@ -109,15 +109,15 @@ type TfResource struct {
 	Values       map[string]any `json:"values"`
 }
 
-func (c Comparer) Compare(a string, b string) {
-	stateA := loadJson(a)
-	stateB := loadJson(b)
-	c.inA = newIdNormalizer(stateA.Values.RootModule.Resources)
-	c.inB = newIdNormalizer(stateB.Values.RootModule.Resources)
-	normalizedA := normalizeResource(c.inA, c.sn, stateA.Values.RootModule.Resources)
-	normalizedB := normalizeResource(c.inB, c.sn, stateB.Values.RootModule.Resources)
+func (c Comparer) Compare(l string, r string) {
+	stateL := loadJson(l)
+	stateR := loadJson(r)
+	c.inL = newIdNormalizer(stateL.Values.RootModule.Resources)
+	c.inR = newIdNormalizer(stateR.Values.RootModule.Resources)
+	normalizedL := normalizeResource(c.inL, c.sn, stateL.Values.RootModule.Resources)
+	normalizedR := normalizeResource(c.inR, c.sn, stateR.Values.RootModule.Resources)
 
-	c.compareResources(normalizedA, normalizedB)
+	c.compareResources(normalizedL, normalizedR)
 }
 
 func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource) []TfResource {
@@ -143,24 +143,24 @@ func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource)
 	return normalizedResources
 }
 
-func (c Comparer) compareResources(a []TfResource, b []TfResource) {
+func (c Comparer) compareResources(l []TfResource, r []TfResource) {
 	aNotFound := []string{}
 	bFound := map[int]bool{}
 
 	resourceWithDiffCount := 0
 
-	for i := range a {
+	for i := range l {
 		found := false
-		for j := range b {
-			if addressNormalize(a[i].Address) == addressNormalize(b[j].Address) {
-				s := c.sn.findSchema(a[i])
+		for j := range r {
+			if addressNormalize(l[i].Address) == addressNormalize(r[j].Address) {
+				s := c.sn.findSchema(l[i])
 
-				patch, err := jsondiff.CompareOpts(a[i].Values, b[j].Values, jsondiff.Equivalent())
+				patch, err := jsondiff.CompareOpts(l[i].Values, r[j].Values, jsondiff.Equivalent())
 				if err != nil {
 					panic(err)
 				}
 
-				fmt.Printf("\ncompare %s\n", a[i].Address)
+				fmt.Printf("\ncompare %s\n", l[i].Address)
 
 				if patch != nil {
 					effectiveDiffCount := 0
@@ -171,7 +171,7 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 						}
 						if isArgument(s, path[1:]) {
 							if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") || strings.HasSuffix(path, "/assume_role_policy") {
-								c.comparePolicy(path, a[i], b[j])
+								c.comparePolicy(path, l[i], r[j])
 							} else {
 								fmt.Printf("  %s : %s -> %s\n", path, serialize(patch[k].OldValue), serialize(patch[k].Value))
 							}
@@ -188,7 +188,7 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 			}
 		}
 		if !found {
-			aNotFound = append(aNotFound, a[i].Address)
+			aNotFound = append(aNotFound, l[i].Address)
 		}
 	}
 
@@ -199,9 +199,9 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 
 	fmt.Println("")
 	fmt.Println("Right not compared:")
-	for j := range b {
+	for j := range r {
 		if !bFound[j] {
-			fmt.Printf("%s\n", b[j].Address)
+			fmt.Printf("%s\n", r[j].Address)
 		}
 	}
 
@@ -209,13 +209,13 @@ func (c Comparer) compareResources(a []TfResource, b []TfResource) {
 	fmt.Printf("common resources: %d\n", len(bFound))
 	fmt.Printf("with diff: %d\n", resourceWithDiffCount)
 	fmt.Printf("left only resources: %d\n", len(aNotFound))
-	fmt.Printf("right only resources: %d\n", len(b)-len(bFound))
+	fmt.Printf("right only resources: %d\n", len(r)-len(bFound))
 }
 
-func (c Comparer) comparePolicy(path string, a TfResource, b TfResource) {
+func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) {
 	fmt.Printf("  compare %s:\n", path)
 
-	v, err := dproxy.Pointer(a.Values, path).String()
+	v, err := dproxy.Pointer(l.Values, path).String()
 	if err != nil {
 		panic(err)
 	}
@@ -223,7 +223,7 @@ func (c Comparer) comparePolicy(path string, a TfResource, b TfResource) {
 		v = "{}"
 	}
 
-	w, err := dproxy.Pointer(b.Values, path).String()
+	w, err := dproxy.Pointer(r.Values, path).String()
 	if err != nil {
 		panic(err)
 	}
@@ -231,22 +231,22 @@ func (c Comparer) comparePolicy(path string, a TfResource, b TfResource) {
 		w = "{}"
 	}
 
-	var dataA map[string]any
-	err = json.Unmarshal([]byte(v), &dataA)
+	var dataL map[string]any
+	err = json.Unmarshal([]byte(v), &dataL)
 	if err != nil {
 		panic(err)
 	}
 
-	var dataB map[string]any
-	err = json.Unmarshal([]byte(w), &dataB)
+	var dataR map[string]any
+	err = json.Unmarshal([]byte(w), &dataR)
 	if err != nil {
 		panic(err)
 	}
 
-	dataA = c.inA.normalize(dataA)
-	dataB = c.inB.normalize(dataB)
+	dataL = c.inL.normalize(dataL)
+	dataR = c.inR.normalize(dataR)
 
-	patch, err := jsondiff.CompareOpts(dataA, dataB, jsondiff.Equivalent())
+	patch, err := jsondiff.CompareOpts(dataL, dataR, jsondiff.Equivalent())
 	if err != nil {
 		panic(err)
 	}
