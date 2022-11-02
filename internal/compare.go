@@ -57,35 +57,35 @@ type Comparer struct {
 	sn     schematicNormalizer
 }
 
-func New(configPath string, providersSchemaPath string) Comparer {
+func New(configPath string, providersSchemaPath string) (*Comparer, error) {
 	c := Config{}
 
 	if configPath != "" {
 		bytes, err := ioutil.ReadFile(configPath)
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		if err = yaml.Unmarshal(bytes, &c); err != nil {
-			panic(err)
+			return nil, err
 		}
 	}
 
 	bytes, err := ioutil.ReadFile(providersSchemaPath)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	var ps TfProvidersSchema
 	if err = json.Unmarshal(bytes, &ps); err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	sn := newSchematicNormalizer(c.IgnoreDiff, ps)
 
-	return Comparer{
+	return &Comparer{
 		config: c,
 		ps:     ps,
 		sn:     sn,
-	}
+	}, nil
 }
 
 // see https://www.terraform.io/internals/json-format
@@ -112,15 +112,27 @@ type TfResource struct {
 	Values       map[string]any `json:"values"`
 }
 
-func (c Comparer) Compare(l string, r string) {
-	stateL := loadJson(l)
-	stateR := loadJson(r)
+func (c Comparer) Compare(l string, r string) error {
+	stateL, err := loadJson(l)
+	if err != nil {
+		return err
+	}
+
+	stateR, err := loadJson(r)
+	if err != nil {
+		return err
+	}
+
 	c.inL = newIdNormalizer(stateL.Values.RootModule.Resources)
 	c.inR = newIdNormalizer(stateR.Values.RootModule.Resources)
 	normalizedL := normalizeResource(c.inL, c.sn, stateL.Values.RootModule.Resources)
 	normalizedR := normalizeResource(c.inR, c.sn, stateR.Values.RootModule.Resources)
 
-	c.compareResources(normalizedL, normalizedR)
+	if err = c.compareResources(normalizedL, normalizedR); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource) []TfResource {
@@ -146,7 +158,7 @@ func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource)
 	return normalizedResources
 }
 
-func (c Comparer) compareResources(l []TfResource, r []TfResource) {
+func (c Comparer) compareResources(l []TfResource, r []TfResource) error {
 	aNotFound := []string{}
 	bFound := map[int]bool{}
 
@@ -160,7 +172,7 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) {
 
 				patch, err := jsondiff.CompareOpts(l[i].Values, r[j].Values, jsondiff.Equivalent())
 				if err != nil {
-					panic(err)
+					return err
 				}
 
 				fmt.Printf("\ncompare %s\n", l[i].Address)
@@ -172,11 +184,26 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) {
 						if c.isIgnorable(patch[k]) {
 							continue
 						}
-						if isArgument(s, path[1:]) {
+						isArg, err := isArgument(s, path[1:])
+						if err != nil {
+							return err
+						}
+						if isArg {
 							if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") || strings.HasSuffix(path, "/assume_role_policy") {
-								c.comparePolicy(path, l[i], r[j])
+								err := c.comparePolicy(path, l[i], r[j])
+								if err != nil {
+									return err
+								}
 							} else {
-								fmt.Printf("  %s : %s -> %s\n", path, serialize(patch[k].OldValue), serialize(patch[k].Value))
+								old, err := serialize(patch[k].OldValue)
+								if err != nil {
+									return err
+								}
+								new, err := serialize(patch[k].Value)
+								if err != nil {
+									return err
+								}
+								fmt.Printf("  %s : %s -> %s\n", path, old, new)
 							}
 							effectiveDiffCount++
 						}
@@ -213,14 +240,16 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) {
 	fmt.Printf("with diff: %d\n", resourceWithDiffCount)
 	fmt.Printf("left only resources: %d\n", len(aNotFound))
 	fmt.Printf("right only resources: %d\n", len(r)-len(bFound))
+
+	return nil
 }
 
-func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) {
+func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
 	fmt.Printf("  compare %s:\n", path)
 
 	v, err := dproxy.Pointer(l.Values, path).String()
 	if err != nil {
-		panic(err)
+		return err
 	}
 	if v == "" {
 		v = "{}"
@@ -228,7 +257,7 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) {
 
 	w, err := dproxy.Pointer(r.Values, path).String()
 	if err != nil {
-		panic(err)
+		return err
 	}
 	if w == "" {
 		w = "{}"
@@ -237,13 +266,13 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) {
 	var dataL map[string]any
 	err = json.Unmarshal([]byte(v), &dataL)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	var dataR map[string]any
 	err = json.Unmarshal([]byte(w), &dataR)
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	dataL = c.inL.normalize(dataL)
@@ -251,7 +280,7 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) {
 
 	patch, err := jsondiff.CompareOpts(dataL, dataR, jsondiff.Equivalent())
 	if err != nil {
-		panic(err)
+		return err
 	}
 
 	for i := range patch {
@@ -261,8 +290,18 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) {
 			continue
 		}
 
-		fmt.Printf("    %s : %s -> %s\n", path, serialize(patch[i].OldValue), serialize(patch[i].Value))
+		old, err := serialize(patch[i].OldValue)
+		if err != nil {
+			return err
+		}
+		new, err := serialize(patch[i].Value)
+		if err != nil {
+			return err
+		}
+		fmt.Printf("    %s : %s -> %s\n", path, old, new)
 	}
+
+	return nil
 }
 
 func (c Comparer) isIgnorable(op jsondiff.Operation) bool {
@@ -301,7 +340,7 @@ outer:
 	return i == len(old) && j == len(new)
 }
 
-func isArgument(s TfSchema, path string) bool {
+func isArgument(s TfSchema, path string) (bool, error) {
 	i := strings.Index(path, "/")
 
 	var p string
@@ -314,46 +353,46 @@ func isArgument(s TfSchema, path string) bool {
 	if a, ok := s.Block.Attributes[p]; ok {
 		if p == "id" {
 			// exception for id
-			return !a.Computed
+			return !a.Computed, nil
 		}
-		return !a.Computed || a.Optional
+		return !a.Computed || a.Optional, nil
 	}
 
 	if a, ok := s.Block.BlockTypes[p]; ok {
 		j := strings.Index(path[i+1:], "/")
 		if j < 0 {
 			// schema with sub-blocks should be a manual argument
-			return true
+			return true, nil
 		}
 		return isArgument(a, path[i+1+j+1:])
 	}
-	panic(fmt.Errorf("schema attribute not found: %s", path))
+	return false, fmt.Errorf("schema attribute not found: %s", path)
 }
 
 func addressNormalize(address string) string {
 	return strings.ReplaceAll(address, "-", "_")
 }
 
-func serialize(val any) string {
+func serialize(val any) (string, error) {
 	s, err := json.Marshal(val)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 
-	return string(s)
+	return string(s), nil
 }
 
-func loadJson(path string) TfState {
+func loadJson(path string) (*TfState, error) {
 	bytes, err := ioutil.ReadFile(path)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	var data TfState
 	err = json.Unmarshal(bytes, &data)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
-	return data
+	return &data, nil
 }

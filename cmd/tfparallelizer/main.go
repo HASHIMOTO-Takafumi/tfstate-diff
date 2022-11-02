@@ -23,9 +23,15 @@ func main() {
 	var l = flag.Arg(1)
 	var r = flag.Arg(2)
 
-	comparer := internal.New(*c, s)
+	comparer, err := internal.New(*c, s)
+	if err != nil {
+		fmt.Println(err)
+		return
+	}
 
-	comparer.Compare(l, r)
+	if err = comparer.Compare(l, r); err != nil {
+		fmt.Println(err)
+	}
 }
 
 func usage() {
