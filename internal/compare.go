@@ -313,11 +313,23 @@ func (c Comparer) isIgnorable(op jsondiff.Operation) bool {
 
 	old, ok := op.OldValue.(string)
 	if !ok {
-		return false
+		if olds, ok := op.OldValue.([]any); ok && len(olds) == 1 {
+			if old, ok = olds[0].(string); !ok {
+				return false
+			}
+		} else {
+			return false
+		}
 	}
 	new, ok := op.Value.(string)
 	if !ok {
-		return false
+		if news, ok := op.Value.([]any); ok && len(news) == 1 {
+			if new, ok = news[0].(string); !ok {
+				return false
+			}
+		} else {
+			return false
+		}
 	}
 
 	i, j := 0, 0
