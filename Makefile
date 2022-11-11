@@ -1,2 +1,2 @@
 build:
-	go build cmd/tfparallelizer/main.go
+	go build cmd/tfstate-diff/main.go

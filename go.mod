@@ -1,4 +1,4 @@
-module github.com/HASHIMOTO-Takafumi/tfparallelizer
+module github.com/HASHIMOTO-Takafumi/tfstate-diff
 
 go 1.19
 

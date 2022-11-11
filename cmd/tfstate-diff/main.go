@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/HASHIMOTO-Takafumi/tfparallelizer/internal"
+	"github.com/HASHIMOTO-Takafumi/tfstate-diff/internal"
 )
 
 func main() {
