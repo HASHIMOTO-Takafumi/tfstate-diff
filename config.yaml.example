@@ -1,3 +1,9 @@
+ignore_pattern:
+  - path: ".+description"
+  - path: ".+/Sid"
+  - path: ".*/comment"
+  - address: "aws_route53_zone"
+    path: "/name"
 ignore_diff:
   - left: "stg"
     right: "prod"
@@ -5,4 +11,3 @@ ignore_diff:
     right: "prod-"
   - left: ""
     right: "prod/"
-  

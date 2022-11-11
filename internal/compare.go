@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"regexp"
 	"strings"
 
 	"github.com/koron/go-dproxy"
@@ -12,7 +13,13 @@ import (
 )
 
 type Config struct {
-	IgnoreDiff []ConfigIgnoreDiff `yaml:"ignore_diff"`
+	IgnorePattern []ConfigIgnorePattern `yaml:"ignore_pattern"`
+	IgnoreDiff    []ConfigIgnoreDiff    `yaml:"ignore_diff"`
+}
+
+type ConfigIgnorePattern struct {
+	Address string `yaml:"address,omitempty"`
+	Path    string `yaml:"path,omitempty"`
 }
 
 type ConfigIgnoreDiff struct {
@@ -49,12 +56,18 @@ type TfSchemaAttribute struct {
 	Computed bool `json:"computed"`
 }
 
+type IgnorePattern struct {
+	address *regexp.Regexp
+	path    *regexp.Regexp
+}
+
 type Comparer struct {
-	config Config
-	ps     TfProvidersSchema
-	inL    idNormalizer
-	inR    idNormalizer
-	sn     schematicNormalizer
+	config        Config
+	ignorePattern []IgnorePattern
+	ps            TfProvidersSchema
+	inL           idNormalizer
+	inR           idNormalizer
+	sn            schematicNormalizer
 }
 
 func New(configPath string, providersSchemaPath string) (*Comparer, error) {
@@ -70,6 +83,24 @@ func New(configPath string, providersSchemaPath string) (*Comparer, error) {
 		}
 	}
 
+	ip := make([]IgnorePattern, len(c.IgnorePattern))
+	for i := range c.IgnorePattern {
+		if c.IgnorePattern[i].Address != "" {
+			re, err := regexp.Compile(c.IgnorePattern[i].Address)
+			if err != nil {
+				return nil, err
+			}
+			ip[i].address = re
+		}
+		if c.IgnorePattern[i].Path != "" {
+			re, err := regexp.Compile(c.IgnorePattern[i].Path)
+			if err != nil {
+				return nil, err
+			}
+			ip[i].path = re
+		}
+	}
+
 	bytes, err := ioutil.ReadFile(providersSchemaPath)
 	if err != nil {
 		return nil, err
@@ -82,9 +113,10 @@ func New(configPath string, providersSchemaPath string) (*Comparer, error) {
 	sn := newSchematicNormalizer(c.IgnoreDiff, ps)
 
 	return &Comparer{
-		config: c,
-		ps:     ps,
-		sn:     sn,
+		config:        c,
+		ignorePattern: ip,
+		ps:            ps,
+		sn:            sn,
 	}, nil
 }
 
@@ -181,7 +213,7 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) error {
 					effectiveDiffCount := 0
 					for k := range patch {
 						path := patch[k].Path.String()
-						if c.isIgnorable(patch[k]) {
+						if c.isIgnorable(l[i].Address, "", patch[k]) {
 							continue
 						}
 						isArg, err := isArgument(s, path[1:])
@@ -284,9 +316,9 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
 	}
 
 	for i := range patch {
-		path := patch[i].Path.String()
+		p := patch[i].Path.String()
 
-		if c.isIgnorable(patch[i]) {
+		if c.isIgnorable(l.Address, path, patch[i]) {
 			continue
 		}
 
@@ -298,14 +330,21 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("    %s : %s -> %s\n", path, old, new)
+		fmt.Printf("    %s : %s -> %s\n", p, old, new)
 	}
 
 	return nil
 }
 
-func (c Comparer) isIgnorable(op jsondiff.Operation) bool {
+func (c Comparer) isIgnorable(address string, basePath string, op jsondiff.Operation) bool {
 	path := op.Path.String()
+
+	fullPath := basePath + path
+	for i := range c.ignorePattern {
+		if (c.ignorePattern[i].address == nil || c.ignorePattern[i].address.MatchString(address)) && (c.ignorePattern[i].path == nil || c.ignorePattern[i].path.MatchString(fullPath)) {
+			return true
+		}
+	}
 
 	if strings.HasPrefix(path, "/tags/") || strings.HasPrefix(path, "/tags_all/") {
 		return true
