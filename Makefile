@@ -1,2 +1,7 @@
+COMMAND_NAME=tfstate-diff
+
 build:
-	go build cmd/tfstate-diff/main.go
+	cd cmd/$(COMMAND_NAME) && go build -ldflags "-s -w" -trimpath
+
+clean:
+	rm -f cmd/$(COMMAND_NAME)/$(COMMAND_NAME)
