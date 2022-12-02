@@ -191,8 +191,8 @@ func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource)
 }
 
 func (c Comparer) compareResources(l []TfResource, r []TfResource) error {
-	aNotFound := []string{}
-	bFound := map[int]bool{}
+	notFoundL := []string{}
+	foundR := map[int]bool{}
 
 	resourceWithDiffCount := 0
 
@@ -245,33 +245,33 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) error {
 					}
 				}
 				found = true
-				bFound[j] = true
+				foundR[j] = true
 				break
 			}
 		}
 		if !found {
-			aNotFound = append(aNotFound, l[i].Address)
+			notFoundL = append(notFoundL, l[i].Address)
 		}
 	}
 
 	fmt.Println("Left not compared:")
-	for i := range aNotFound {
-		fmt.Printf("%s\n", aNotFound[i])
+	for i := range notFoundL {
+		fmt.Printf("%s\n", notFoundL[i])
 	}
 
 	fmt.Println("")
 	fmt.Println("Right not compared:")
 	for j := range r {
-		if !bFound[j] {
+		if !foundR[j] {
 			fmt.Printf("%s\n", r[j].Address)
 		}
 	}
 
 	fmt.Println("")
-	fmt.Printf("common resources: %d\n", len(bFound))
+	fmt.Printf("common resources: %d\n", len(foundR))
 	fmt.Printf("with diff: %d\n", resourceWithDiffCount)
-	fmt.Printf("left only resources: %d\n", len(aNotFound))
-	fmt.Printf("right only resources: %d\n", len(r)-len(bFound))
+	fmt.Printf("left only resources: %d\n", len(notFoundL))
+	fmt.Printf("right only resources: %d\n", len(r)-len(foundR))
 
 	return nil
 }
