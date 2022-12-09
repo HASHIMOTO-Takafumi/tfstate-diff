@@ -121,10 +121,17 @@ func New(configPath string, providersSchemaPath string) (*Comparer, error) {
 }
 
 // see https://www.terraform.io/internals/json-format
+
 type TfState struct {
-	FormatVersion    string   `json:"format_version"`
-	TerraformVersion string   `json:"terraform_version"`
-	Values           TfValues `json:"values"`
+	FormatVersion    string    `json:"format_version"`
+	TerraformVersion string    `json:"terraform_version"`
+	Values           *TfValues `json:"values"`
+}
+
+type TfStatePlan struct {
+	TfState
+	PriorState    *TfState  `json:"prior_state"`
+	PlannedValues *TfValues `json:"planned_values"`
 }
 
 type TfValues struct {
@@ -145,26 +152,86 @@ type TfResource struct {
 }
 
 func (c Comparer) Compare(l string, r string) error {
-	stateL, err := loadJson(l)
+	spL, err := loadJson(l)
 	if err != nil {
 		return err
 	}
 
-	stateR, err := loadJson(r)
+	spR, err := loadJson(r)
 	if err != nil {
 		return err
 	}
 
-	c.inL = newIdNormalizer(stateL.Values.RootModule.Resources)
-	c.inR = newIdNormalizer(stateR.Values.RootModule.Resources)
-	normalizedL := normalizeResource(c.inL, c.sn, stateL.Values.RootModule.Resources)
-	normalizedR := normalizeResource(c.inR, c.sn, stateR.Values.RootModule.Resources)
+	isPlanL := spL.PriorState != nil
+	isPlanR := spR.PriorState != nil
 
-	if err = c.compareResources(normalizedL, normalizedR); err != nil {
+	var valuesL, valuesR *TfValues
+
+	if isPlanL {
+		valuesL = spL.PriorState.Values
+	} else {
+		valuesL = spL.TfState.Values
+	}
+
+	if isPlanR {
+		valuesR = spR.PriorState.Values
+	} else {
+		valuesR = spR.TfState.Values
+	}
+
+	diff, err := c.compareValues(*valuesL, *valuesR)
+	if err != nil {
 		return err
+	}
+
+	fmt.Println("")
+	fmt.Printf("common resources:     %d\n", diff.Common)
+	fmt.Printf("resources with diff:  %d\n", diff.Diff)
+	fmt.Printf("left only resources:  %d\n", diff.LeftOnly)
+	fmt.Printf("right only resources: %d\n", diff.RightOnly)
+
+	if isPlanL || isPlanR {
+		if isPlanL {
+			valuesL = spL.PlannedValues
+		}
+		if isPlanR {
+			valuesR = spR.PlannedValues
+		}
+
+		planDiff, err := c.compareValues(*valuesL, *valuesR)
+		if err != nil {
+			return err
+		}
+
+		fmt.Println("")
+		fmt.Printf("common resources:     %d (%d)\n", planDiff.Common, planDiff.Common-diff.Common)
+		fmt.Printf("resources with diff:  %d (%d)\n", planDiff.Diff, planDiff.Diff-diff.Diff)
+		fmt.Printf("left only resources:  %d (%d)\n", planDiff.LeftOnly, planDiff.LeftOnly-diff.LeftOnly)
+		fmt.Printf("right only resources: %d (%d)\n", planDiff.RightOnly, planDiff.RightOnly-diff.RightOnly)
 	}
 
 	return nil
+}
+
+type StateDiff struct {
+	Common    int
+	Diff      int
+	LeftOnly  int
+	RightOnly int
+}
+
+func (c Comparer) compareValues(l TfValues, r TfValues) (*StateDiff, error) {
+	c.inL = newIdNormalizer(l.RootModule.Resources)
+	c.inR = newIdNormalizer(r.RootModule.Resources)
+	normalizedL := normalizeResource(c.inL, c.sn, l.RootModule.Resources)
+	normalizedR := normalizeResource(c.inR, c.sn, r.RootModule.Resources)
+
+	diff, err := c.compareResources(normalizedL, normalizedR)
+	if err != nil {
+		return nil, err
+	}
+
+	return diff, nil
 }
 
 func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource) []TfResource {
@@ -190,7 +257,7 @@ func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource)
 	return normalizedResources
 }
 
-func (c Comparer) compareResources(l []TfResource, r []TfResource) error {
+func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, error) {
 	notFoundL := []string{}
 	foundR := map[int]bool{}
 
@@ -204,7 +271,7 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) error {
 
 				patch, err := jsondiff.CompareOpts(l[i].Values, r[j].Values, jsondiff.Equivalent())
 				if err != nil {
-					return err
+					return nil, err
 				}
 
 				fmt.Printf("\ncompare %s\n", l[i].Address)
@@ -218,22 +285,22 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) error {
 						}
 						isArg, err := isArgument(s, path[1:])
 						if err != nil {
-							return err
+							return nil, err
 						}
 						if isArg {
 							if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") || strings.HasSuffix(path, "/assume_role_policy") {
 								err := c.comparePolicy(path, l[i], r[j])
 								if err != nil {
-									return err
+									return nil, err
 								}
 							} else {
 								old, err := serialize(patch[k].OldValue)
 								if err != nil {
-									return err
+									return nil, err
 								}
 								new, err := serialize(patch[k].Value)
 								if err != nil {
-									return err
+									return nil, err
 								}
 								fmt.Printf("  %s : %s -> %s\n", path, old, new)
 							}
@@ -267,13 +334,12 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) error {
 		}
 	}
 
-	fmt.Println("")
-	fmt.Printf("common resources: %d\n", len(foundR))
-	fmt.Printf("with diff: %d\n", resourceWithDiffCount)
-	fmt.Printf("left only resources: %d\n", len(notFoundL))
-	fmt.Printf("right only resources: %d\n", len(r)-len(foundR))
-
-	return nil
+	return &StateDiff{
+		Common:    len(foundR),
+		Diff:      resourceWithDiffCount,
+		LeftOnly:  len(notFoundL),
+		RightOnly: len(r) - len(foundR),
+	}, nil
 }
 
 func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
@@ -433,13 +499,13 @@ func serialize(val any) (string, error) {
 	return string(s), nil
 }
 
-func loadJson(path string) (*TfState, error) {
+func loadJson(path string) (*TfStatePlan, error) {
 	bytes, err := ioutil.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
 
-	var data TfState
+	var data TfStatePlan
 	err = json.Unmarshal(bytes, &data)
 	if err != nil {
 		return nil, err
