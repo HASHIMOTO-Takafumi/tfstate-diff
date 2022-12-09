@@ -204,10 +204,10 @@ func (c Comparer) Compare(l string, r string) error {
 		}
 
 		fmt.Println("")
-		fmt.Printf("common resources:     %d (%d)\n", planDiff.Common, planDiff.Common-diff.Common)
-		fmt.Printf("resources with diff:  %d (%d)\n", planDiff.Diff, planDiff.Diff-diff.Diff)
-		fmt.Printf("left only resources:  %d (%d)\n", planDiff.LeftOnly, planDiff.LeftOnly-diff.LeftOnly)
-		fmt.Printf("right only resources: %d (%d)\n", planDiff.RightOnly, planDiff.RightOnly-diff.RightOnly)
+		fmt.Printf("common resources:    %6d (%+4d)\n", planDiff.Common, planDiff.Common-diff.Common)
+		fmt.Printf("resources with diff: %6d (%+4d)\n", planDiff.Diff, planDiff.Diff-diff.Diff)
+		fmt.Printf("left only resources: %6d (%+4d)\n", planDiff.LeftOnly, planDiff.LeftOnly-diff.LeftOnly)
+		fmt.Printf("right only resources:%6d (%+4d)\n", planDiff.RightOnly, planDiff.RightOnly-diff.RightOnly)
 	}
 
 	return nil
