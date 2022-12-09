@@ -185,10 +185,10 @@ func (c Comparer) Compare(l string, r string) error {
 	}
 
 	fmt.Println("")
-	fmt.Printf("common resources:     %d\n", diff.Common)
-	fmt.Printf("resources with diff:  %d\n", diff.Diff)
-	fmt.Printf("left only resources:  %d\n", diff.LeftOnly)
-	fmt.Printf("right only resources: %d\n", diff.RightOnly)
+	fmt.Printf("common resources:    %6d\n", diff.Common)
+	fmt.Printf("resources with diff: %6d\n", diff.Diff)
+	fmt.Printf("left only resources: %6d\n", diff.LeftOnly)
+	fmt.Printf("right only resources:%6d\n", diff.RightOnly)
 
 	if isPlanL || isPlanR {
 		if isPlanL {
