@@ -3,6 +3,7 @@ package internal
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"regexp"
 	"strings"
@@ -68,6 +69,7 @@ type Comparer struct {
 	inL           idNormalizer
 	inR           idNormalizer
 	sn            schematicNormalizer
+	wDetail       io.Writer
 }
 
 func New(configPath string, providersSchemaPath string) (*Comparer, error) {
@@ -117,7 +119,12 @@ func New(configPath string, providersSchemaPath string) (*Comparer, error) {
 		ignorePattern: ip,
 		ps:            ps,
 		sn:            sn,
+		wDetail:       ioutil.Discard,
 	}, nil
+}
+
+func (c *Comparer) SetDetailWriter(w io.Writer) {
+	c.wDetail = w
 }
 
 // see https://www.terraform.io/internals/json-format
@@ -184,12 +191,6 @@ func (c Comparer) Compare(l string, r string) error {
 		return err
 	}
 
-	fmt.Println("")
-	fmt.Printf("common resources:    %6d\n", diff.Common)
-	fmt.Printf("resources with diff: %6d\n", len(diff.Diffs))
-	fmt.Printf("left only resources: %6d\n", len(diff.LeftOnly))
-	fmt.Printf("right only resources:%6d\n", len(diff.RightOnly))
-
 	if isPlanL || isPlanR {
 		if isPlanL {
 			valuesL = spL.PlannedValues
@@ -203,11 +204,15 @@ func (c Comparer) Compare(l string, r string) error {
 			return err
 		}
 
-		fmt.Println("")
 		fmt.Printf("common resources:    %6d (%+4d)\n", planDiff.Common, planDiff.Common-diff.Common)
 		fmt.Printf("resources with diff: %6d (%+4d)\n", len(planDiff.Diffs), len(planDiff.Diffs)-len(diff.Diffs))
 		fmt.Printf("left only resources: %6d (%+4d)\n", len(planDiff.LeftOnly), len(planDiff.LeftOnly)-len(diff.LeftOnly))
 		fmt.Printf("right only resources:%6d (%+4d)\n", len(planDiff.RightOnly), len(planDiff.RightOnly)-len(diff.RightOnly))
+	} else {
+		fmt.Printf("common resources:    %6d\n", diff.Common)
+		fmt.Printf("resources with diff: %6d\n", len(diff.Diffs))
+		fmt.Printf("left only resources: %6d\n", len(diff.LeftOnly))
+		fmt.Printf("right only resources:%6d\n", len(diff.RightOnly))
 	}
 
 	return nil
@@ -286,7 +291,7 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 					return nil, err
 				}
 
-				fmt.Printf("\ncompare %s\n", l[i].Address)
+				fmt.Fprintf(c.wDetail, "compare %s\n", l[i].Address)
 				rd := ResourceDiff{Name: l[i].Address}
 
 				if patch != nil {
@@ -315,7 +320,7 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 								if err != nil {
 									return nil, err
 								}
-								fmt.Printf("  %s : %s -> %s\n", path, old, new)
+								fmt.Fprintf(c.wDetail, "  %s : %s -> %s\n", path, old, new)
 								rd.Fields = append(rd.Fields, FieldDiff{Path: path, OldValue: old, NewString: new})
 							}
 						}
@@ -325,6 +330,9 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 						diffs = append(diffs, rd)
 					}
 				}
+
+				fmt.Fprintln(c.wDetail, "")
+
 				found = true
 				foundR[j] = true
 				break
@@ -335,20 +343,22 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 		}
 	}
 
-	fmt.Println("Left not compared:")
+	fmt.Fprintln(c.wDetail, "Left not compared:")
 	for i := range leftOnly {
-		fmt.Printf("%s\n", leftOnly[i])
+		fmt.Fprintf(c.wDetail, "%s\n", leftOnly[i])
 	}
 
 	rightOnly := []string{}
-	fmt.Println("")
-	fmt.Println("Right not compared:")
+	fmt.Fprintln(c.wDetail, "")
+	fmt.Fprintln(c.wDetail, "Right not compared:")
 	for j := range r {
 		if !foundR[j] {
-			fmt.Printf("%s\n", r[j].Address)
+			fmt.Fprintf(c.wDetail, "%s\n", r[j].Address)
 			rightOnly = append(rightOnly, r[j].Address)
 		}
 	}
+
+	fmt.Fprintln(c.wDetail, "")
 
 	return &StateDiff{
 		Common:    len(foundR),
@@ -359,7 +369,7 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 }
 
 func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) (*ResourceDiff, error) {
-	fmt.Printf("  compare %s:\n", path)
+	fmt.Fprintf(c.wDetail, "  compare %s:\n", path)
 	pd := ResourceDiff{Name: path}
 
 	v, err := dproxy.Pointer(l.Values, path).String()
@@ -413,7 +423,7 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) (*Resou
 		if err != nil {
 			return nil, err
 		}
-		fmt.Printf("    %s : %s -> %s\n", p, old, new)
+		fmt.Fprintf(c.wDetail, "    %s : %s -> %s\n", p, old, new)
 		pd.Fields = append(pd.Fields, FieldDiff{Path: p, OldValue: old, NewString: new})
 	}
 

@@ -9,6 +9,7 @@ import (
 )
 
 func main() {
+	var verbose = flag.Bool("v", false, "be verbose")
 	var c = flag.String("c", "", "YAML configuration file")
 
 	flag.Usage = usage
@@ -27,6 +28,10 @@ func main() {
 	if err != nil {
 		fmt.Println(err)
 		return
+	}
+
+	if *verbose {
+		comparer.SetDetailWriter(os.Stdout)
 	}
 
 	if err = comparer.Compare(l, r); err != nil {
