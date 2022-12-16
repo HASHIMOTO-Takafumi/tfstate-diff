@@ -186,9 +186,9 @@ func (c Comparer) Compare(l string, r string) error {
 
 	fmt.Println("")
 	fmt.Printf("common resources:    %6d\n", diff.Common)
-	fmt.Printf("resources with diff: %6d\n", diff.Diff)
-	fmt.Printf("left only resources: %6d\n", diff.LeftOnly)
-	fmt.Printf("right only resources:%6d\n", diff.RightOnly)
+	fmt.Printf("resources with diff: %6d\n", len(diff.Diffs))
+	fmt.Printf("left only resources: %6d\n", len(diff.LeftOnly))
+	fmt.Printf("right only resources:%6d\n", len(diff.RightOnly))
 
 	if isPlanL || isPlanR {
 		if isPlanL {
@@ -205,9 +205,9 @@ func (c Comparer) Compare(l string, r string) error {
 
 		fmt.Println("")
 		fmt.Printf("common resources:    %6d (%+4d)\n", planDiff.Common, planDiff.Common-diff.Common)
-		fmt.Printf("resources with diff: %6d (%+4d)\n", planDiff.Diff, planDiff.Diff-diff.Diff)
-		fmt.Printf("left only resources: %6d (%+4d)\n", planDiff.LeftOnly, planDiff.LeftOnly-diff.LeftOnly)
-		fmt.Printf("right only resources:%6d (%+4d)\n", planDiff.RightOnly, planDiff.RightOnly-diff.RightOnly)
+		fmt.Printf("resources with diff: %6d (%+4d)\n", len(planDiff.Diffs), len(planDiff.Diffs)-len(diff.Diffs))
+		fmt.Printf("left only resources: %6d (%+4d)\n", len(planDiff.LeftOnly), len(planDiff.LeftOnly)-len(diff.LeftOnly))
+		fmt.Printf("right only resources:%6d (%+4d)\n", len(planDiff.RightOnly), len(planDiff.RightOnly)-len(diff.RightOnly))
 	}
 
 	return nil
@@ -215,9 +215,21 @@ func (c Comparer) Compare(l string, r string) error {
 
 type StateDiff struct {
 	Common    int
-	Diff      int
-	LeftOnly  int
-	RightOnly int
+	Diffs     []ResourceDiff
+	LeftOnly  []string
+	RightOnly []string
+}
+
+type ResourceDiff struct {
+	Name     string
+	Fields   []FieldDiff
+	Policies []ResourceDiff
+}
+
+type FieldDiff struct {
+	Path      string
+	OldValue  any
+	NewString any
 }
 
 func (c Comparer) compareValues(l TfValues, r TfValues) (*StateDiff, error) {
@@ -258,10 +270,10 @@ func normalizeResource(in idNormalizer, sn schematicNormalizer, rs []TfResource)
 }
 
 func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, error) {
-	notFoundL := []string{}
-	foundR := map[int]bool{}
+	diffs := []ResourceDiff{}
 
-	resourceWithDiffCount := 0
+	leftOnly := []string{}
+	foundR := map[int]bool{}
 
 	for i := range l {
 		found := false
@@ -275,9 +287,9 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 				}
 
 				fmt.Printf("\ncompare %s\n", l[i].Address)
+				rd := ResourceDiff{Name: l[i].Address}
 
 				if patch != nil {
-					effectiveDiffCount := 0
 					for k := range patch {
 						path := patch[k].Path.String()
 						if c.isIgnorable(l[i].Address, "", patch[k]) {
@@ -289,10 +301,11 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 						}
 						if isArg {
 							if strings.HasSuffix(path, "/policy") || strings.HasSuffix(path, "/inline_policy") || strings.HasSuffix(path, "/assume_role_policy") {
-								err := c.comparePolicy(path, l[i], r[j])
+								pd, err := c.comparePolicy(path, l[i], r[j])
 								if err != nil {
 									return nil, err
 								}
+								rd.Policies = append(rd.Policies, *pd)
 							} else {
 								old, err := serialize(patch[k].OldValue)
 								if err != nil {
@@ -303,12 +316,13 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 									return nil, err
 								}
 								fmt.Printf("  %s : %s -> %s\n", path, old, new)
+								rd.Fields = append(rd.Fields, FieldDiff{Path: path, OldValue: old, NewString: new})
 							}
-							effectiveDiffCount++
 						}
 					}
-					if effectiveDiffCount > 0 {
-						resourceWithDiffCount++
+
+					if len(rd.Fields) > 0 || len(rd.Policies) > 0 {
+						diffs = append(diffs, rd)
 					}
 				}
 				found = true
@@ -317,37 +331,40 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 			}
 		}
 		if !found {
-			notFoundL = append(notFoundL, l[i].Address)
+			leftOnly = append(leftOnly, l[i].Address)
 		}
 	}
 
 	fmt.Println("Left not compared:")
-	for i := range notFoundL {
-		fmt.Printf("%s\n", notFoundL[i])
+	for i := range leftOnly {
+		fmt.Printf("%s\n", leftOnly[i])
 	}
 
+	rightOnly := []string{}
 	fmt.Println("")
 	fmt.Println("Right not compared:")
 	for j := range r {
 		if !foundR[j] {
 			fmt.Printf("%s\n", r[j].Address)
+			rightOnly = append(rightOnly, r[j].Address)
 		}
 	}
 
 	return &StateDiff{
 		Common:    len(foundR),
-		Diff:      resourceWithDiffCount,
-		LeftOnly:  len(notFoundL),
-		RightOnly: len(r) - len(foundR),
+		Diffs:     diffs,
+		LeftOnly:  leftOnly,
+		RightOnly: rightOnly,
 	}, nil
 }
 
-func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
+func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) (*ResourceDiff, error) {
 	fmt.Printf("  compare %s:\n", path)
+	pd := ResourceDiff{Name: path}
 
 	v, err := dproxy.Pointer(l.Values, path).String()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if v == "" {
 		v = "{}"
@@ -355,7 +372,7 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
 
 	w, err := dproxy.Pointer(r.Values, path).String()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if w == "" {
 		w = "{}"
@@ -364,13 +381,13 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
 	var dataL map[string]any
 	err = json.Unmarshal([]byte(v), &dataL)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	var dataR map[string]any
 	err = json.Unmarshal([]byte(w), &dataR)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	dataL = c.inL.normalize(dataL)
@@ -378,7 +395,7 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
 
 	patch, err := jsondiff.CompareOpts(dataL, dataR, jsondiff.Equivalent())
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	for i := range patch {
@@ -390,16 +407,17 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) error {
 
 		old, err := serialize(patch[i].OldValue)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		new, err := serialize(patch[i].Value)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		fmt.Printf("    %s : %s -> %s\n", p, old, new)
+		pd.Fields = append(pd.Fields, FieldDiff{Path: p, OldValue: old, NewString: new})
 	}
 
-	return nil
+	return &pd, nil
 }
 
 func (c Comparer) isIgnorable(address string, basePath string, op jsondiff.Operation) bool {
