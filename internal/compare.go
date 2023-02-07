@@ -169,19 +169,27 @@ func (c Comparer) Compare(l string, r string) error {
 		return err
 	}
 
-	isPlanL := spL.PriorState != nil
-	isPlanR := spR.PriorState != nil
+	isPlanL := spL.PlannedValues != nil
+	isPlanR := spR.PlannedValues != nil
 
 	var valuesL, valuesR *TfValues
 
 	if isPlanL {
-		valuesL = spL.PriorState.Values
+		if spL.PriorState != nil {
+			valuesL = spL.PriorState.Values
+		} else {
+			valuesL = spL.PlannedValues
+		}
 	} else {
 		valuesL = spL.TfState.Values
 	}
 
 	if isPlanR {
-		valuesR = spR.PriorState.Values
+		if spR.PriorState != nil {
+			valuesR = spR.PriorState.Values
+		} else {
+			valuesR = spR.PlannedValues
+		}
 	} else {
 		valuesR = spR.TfState.Values
 	}
