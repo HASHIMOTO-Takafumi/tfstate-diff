@@ -452,6 +452,10 @@ func (c Comparer) isIgnorable(address string, basePath string, op jsondiff.Opera
 		return true
 	}
 
+	if op.OldValue == nil && op.Value == nil {
+		return true
+	}
+
 	old, ok := op.OldValue.(string)
 	if !ok {
 		if olds, ok := op.OldValue.([]any); ok && len(olds) == 1 {
