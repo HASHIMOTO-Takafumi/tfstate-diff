@@ -175,20 +175,20 @@ func (c Comparer) Compare(l string, r string) error {
 	var valuesL, valuesR *TfValues
 
 	if isPlanL {
-		if spL.PriorState != nil {
-			valuesL = spL.PriorState.Values
+		if spL.PriorState == nil {
+			valuesL = &TfValues{RootModule: TfRootModule{Resources: []TfResource{}}}
 		} else {
-			valuesL = spL.PlannedValues
+			valuesL = spL.PriorState.Values
 		}
 	} else {
 		valuesL = spL.TfState.Values
 	}
 
 	if isPlanR {
-		if spR.PriorState != nil {
-			valuesR = spR.PriorState.Values
+		if spR.PriorState == nil {
+			valuesR = &TfValues{RootModule: TfRootModule{Resources: []TfResource{}}}
 		} else {
-			valuesR = spR.PlannedValues
+			valuesR = spR.PriorState.Values
 		}
 	} else {
 		valuesR = spR.TfState.Values
