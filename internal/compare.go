@@ -158,7 +158,28 @@ type TfResource struct {
 	Values       map[string]any `json:"values"`
 }
 
-func (c Comparer) Compare(l string, r string) error {
+type ComparisonResult struct {
+	StateDiff *StateDiff `json:"state_diff"`
+	PlanDiff  *StateDiff `json:"plan_diff,omitempty"`
+}
+
+func (cr ComparisonResult) print() {
+	d, p := cr.StateDiff, cr.PlanDiff
+
+	if p != nil {
+		fmt.Printf("common resources:    %6d (%+4d)\n", p.Common, p.Common-d.Common)
+		fmt.Printf("resources with diff: %6d (%+4d)\n", len(p.Diffs), len(p.Diffs)-len(d.Diffs))
+		fmt.Printf("left only resources: %6d (%+4d)\n", len(p.LeftOnly), len(p.LeftOnly)-len(d.LeftOnly))
+		fmt.Printf("right only resources:%6d (%+4d)\n", len(p.RightOnly), len(p.RightOnly)-len(d.RightOnly))
+	} else {
+		fmt.Printf("common resources:    %6d\n", d.Common)
+		fmt.Printf("resources with diff: %6d\n", len(d.Diffs))
+		fmt.Printf("left only resources: %6d\n", len(d.LeftOnly))
+		fmt.Printf("right only resources:%6d\n", len(d.RightOnly))
+	}
+}
+
+func (c Comparer) Compare(l string, r string, printJson bool) error {
 	spL, err := loadJson(l)
 	if err != nil {
 		return err
@@ -199,6 +220,8 @@ func (c Comparer) Compare(l string, r string) error {
 		return err
 	}
 
+	result := ComparisonResult{StateDiff: diff, PlanDiff: nil}
+
 	if isPlanL || isPlanR {
 		if isPlanL {
 			valuesL = spL.PlannedValues
@@ -212,37 +235,39 @@ func (c Comparer) Compare(l string, r string) error {
 			return err
 		}
 
-		fmt.Printf("common resources:    %6d (%+4d)\n", planDiff.Common, planDiff.Common-diff.Common)
-		fmt.Printf("resources with diff: %6d (%+4d)\n", len(planDiff.Diffs), len(planDiff.Diffs)-len(diff.Diffs))
-		fmt.Printf("left only resources: %6d (%+4d)\n", len(planDiff.LeftOnly), len(planDiff.LeftOnly)-len(diff.LeftOnly))
-		fmt.Printf("right only resources:%6d (%+4d)\n", len(planDiff.RightOnly), len(planDiff.RightOnly)-len(diff.RightOnly))
+		result.PlanDiff = planDiff
+	}
+
+	if printJson {
+		b, err := json.Marshal(result)
+		if err != nil {
+			return err
+		}
+		fmt.Print(string(b))
 	} else {
-		fmt.Printf("common resources:    %6d\n", diff.Common)
-		fmt.Printf("resources with diff: %6d\n", len(diff.Diffs))
-		fmt.Printf("left only resources: %6d\n", len(diff.LeftOnly))
-		fmt.Printf("right only resources:%6d\n", len(diff.RightOnly))
+		result.print()
 	}
 
 	return nil
 }
 
 type StateDiff struct {
-	Common    int
-	Diffs     []ResourceDiff
-	LeftOnly  []string
-	RightOnly []string
+	Common    int            `json:"common"`
+	Diffs     []ResourceDiff `json:"resource_diffs"`
+	LeftOnly  []string       `json:"left_only"`
+	RightOnly []string       `json:"right_only"`
 }
 
 type ResourceDiff struct {
-	Name     string
-	Fields   []FieldDiff
-	Policies []ResourceDiff
+	Name     string         `json:"name"`
+	Fields   []FieldDiff    `json:"fields,omitempty"`
+	Policies []ResourceDiff `json:"policies,omitempty"`
 }
 
 type FieldDiff struct {
-	Path      string
-	OldValue  any
-	NewString any
+	Path     string `json:"path"`
+	OldValue any    `json:"old_value"`
+	NewValue any    `json:"new_value"`
 }
 
 func (c Comparer) compareValues(l TfValues, r TfValues) (*StateDiff, error) {
@@ -329,7 +354,7 @@ func (c Comparer) compareResources(l []TfResource, r []TfResource) (*StateDiff, 
 									return nil, err
 								}
 								fmt.Fprintf(c.wDetail, "  %s : %s -> %s\n", path, old, new)
-								rd.Fields = append(rd.Fields, FieldDiff{Path: path, OldValue: old, NewString: new})
+								rd.Fields = append(rd.Fields, FieldDiff{Path: path, OldValue: old, NewValue: new})
 							}
 						}
 					}
@@ -432,7 +457,7 @@ func (c Comparer) comparePolicy(path string, l TfResource, r TfResource) (*Resou
 			return nil, err
 		}
 		fmt.Fprintf(c.wDetail, "    %s : %s -> %s\n", p, old, new)
-		pd.Fields = append(pd.Fields, FieldDiff{Path: p, OldValue: old, NewString: new})
+		pd.Fields = append(pd.Fields, FieldDiff{Path: p, OldValue: old, NewValue: new})
 	}
 
 	return &pd, nil

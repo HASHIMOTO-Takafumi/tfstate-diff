@@ -10,6 +10,7 @@ import (
 
 func main() {
 	var verbose = flag.Bool("v", false, "be verbose")
+	var json = flag.Bool("j", false, "output json")
 	var c = flag.String("c", "", "YAML configuration file")
 
 	flag.Usage = usage
@@ -34,7 +35,7 @@ func main() {
 		comparer.SetDetailWriter(os.Stdout)
 	}
 
-	if err = comparer.Compare(l, r); err != nil {
+	if err = comparer.Compare(l, r, *json); err != nil {
 		fmt.Println(err)
 	}
 }
