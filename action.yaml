@@ -1,0 +1,144 @@
+name: 'tfstate-diff'
+description: 'Compare tfstate/plan'
+inputs:
+  left-directory:
+    description: 'Lefthand Terraform directory'
+    required: true
+  right-directory:
+    description: 'Righthand Terraform directory'
+    required: true
+  config:
+    description: 'Configure file location'
+    required: false
+  template:
+    description: 'Template file location'
+    required: false
+    default: /tmp/comment.tmpl
+  plan:
+    description: 'Compare plans (i.e. consider changes not applied to tfstate)'
+    defalut: true
+    required: false
+  github-token:
+    description: 'The token to call GitHub API'
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: 'composite'
+  steps:
+    - shell: bash
+      working-directory: '${{ inputs.left-directory }}'
+      run: |
+        terraform init
+        terraform plan -out /tmp/tfplan-left
+        terraform show -json /tmp/tfplan-left > /tmp/tfplan-left.json
+        terraform providers schema -json > /tmp/tfschema.json
+    - shell: bash
+      working-directory: '${{ inputs.right-directory }}'
+      run: |
+        terraform init
+        terraform plan -out /tmp/tfplan-right
+        terraform show -json /tmp/tfplan-right > /tmp/tfplan-right.json
+    - shell: bash
+      working-directory: /tmp
+      run: |
+        GOMPLATE_VERSION=v3.11.3
+        curl -sfLO https://github.com/hairyhenderson/gomplate/releases/download/${GOMPLATE_VERSION}/gomplate_linux-amd64
+        install gomplate_linux-amd64 /usr/local/bin/gomplate
+    - shell: bash
+      working-directory: /tmp
+      run: |
+        cat << 'EOF' > comment.tmpl
+        ## tfstate-diff
+
+        {{ if has . "plan_diff" }}
+        {{- $n1 := sub .plan_diff.common .state_diff.common }}
+        {{- $n2 := sub (len .plan_diff.resource_diffs) (len .state_diff.resource_diffs) }}
+        {{- $n3 := sub (len .plan_diff.left_only) (len .state_diff.left_only) }}
+        {{- $n4 := sub (len .plan_diff.right_only) (len .state_diff.right_only) }}
+        - common resources: {{ .plan_diff.common }} ({{ print (lt $n1 0 | ternary "" (eq $n1 0 | ternary "±" "+")) $n1 }})
+        - resources with diff: {{ len .plan_diff.resource_diffs }} ({{ print (lt $n2 0 | ternary "" (eq $n2 0 | ternary "±" "+")) $n2 }})
+        - left only resources: {{ len .plan_diff.left_only }} ({{ print (lt $n3 0 | ternary "" (eq $n3 0 | ternary "±" "+")) $n3 }})
+        - right only resources: {{ len .plan_diff.right_only }} ({{ print (lt $n4 0 | ternary "" (eq $n4 0 | ternary "±" "+")) $n4 }})
+        {{- else }}
+        - common resources: {{ .state_diff.common }}
+        - resources with diff: {{ len .state_diff.resource_diffs }}
+        - left only resources: {{ len .state_diff.left_only }}
+        - right only resources: {{ len .state_diff.right_only }}
+        {{- end }}
+
+        {{- range coll.Slice "plan" "state" }}
+
+        {{- $name := print . "_diff" }}
+
+        {{ if has $ $name }}
+
+        ## {{ . | strings.Title }} diffs
+
+        {{- $diff := index $ $name }}
+
+        #### Resources with diff
+
+        <details>
+        <summary>Results</summary>
+
+        {{ range $diff.resource_diffs }}
+        - {{ .name }}
+        {{- if has . "fields" }}
+        {{- range .fields }}
+          - {{ .path }} : `{{ .old_value }}` -> `{{ .new_value }}`
+        {{- end }}
+        {{- else }}
+        {{- range .policies }}
+          - {{ .name }}
+        {{- if has . "fields" }}
+        {{- range .fields }}
+            - {{ .path }} : `{{ .old_value }}` -> `{{ .new_value }}`
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+        {{- end }}
+
+        </details>
+
+        #### Left-only resources
+
+        <details>
+        <summary>Results</summary>
+
+        {{ range $diff.left_only }}
+        - {{ . }}
+        {{- end }}
+
+        </details>
+
+        #### Right-only resources
+
+        <details>
+        <summary>Results</summary>
+
+        {{ range $diff.right_only }}
+        - {{ . }}
+        {{- end }}
+
+        </details>
+
+        {{ end }}
+
+        {{- end }}
+        EOF
+    - shell: bash
+      run: |
+        VERSION=v1.0.0-alpha.2
+        RELEASE_URL=$(curl -sS -H 'authorization: Bearer ${{ inputs.github-token }}' https://api.github.com/repos/HASHIMOTO-Takafumi/tfstate-diff/releases/tags/${VERSION} | jq -r '.assets[].browser_download_url|select(match("linux.amd64."))')
+        curl -sfLO ${RELEASE_URL}
+        FILENAME=$(basename $RELEASE_URL)
+        unzip ${FILENAME}
+        OPT=
+        if [ '${{ inputs.config }}' != '' ]; then
+          OPT='-c ${{ inputs.config }}'
+        fi
+        chmod +x tfstate-diff
+        ./tfstate-diff ${OPT} -j /tmp/tfschema.json /tmp/tfplan-left.json /tmp/tfplan-right.json \
+          | gomplate -c .=stdin:///in.json -f ${{ inputs.template }} \
+          >> $GITHUB_STEP_SUMMARY
