@@ -130,10 +130,10 @@ runs:
     - shell: bash
       run: |
         VERSION=v1.0.0-alpha.2
-        RELEASE_URL=$(curl -sS -H 'authorization: Bearer ${{ inputs.github-token }}' https://api.github.com/repos/HASHIMOTO-Takafumi/tfstate-diff/releases/tags/${VERSION} | jq -r '.assets[].browser_download_url|select(match("linux.amd64."))')
+        RELEASE_URL=$(curl -sS -H 'authorization: Bearer ${{ inputs.github-token }}' https://api.github.com/repos/HASHIMOTO-Takafumi/tfstate-diff/releases/tags/${VERSION} | jq -r '.assets[].browser_download_url|select(match("_Linux_x86_64"))')
         curl -sfLO ${RELEASE_URL}
         FILENAME=$(basename $RELEASE_URL)
-        unzip ${FILENAME}
+        tar xvf ${FILENAME}
         OPT=
         if [ '${{ inputs.config }}' != '' ]; then
           OPT='-c ${{ inputs.config }}'
