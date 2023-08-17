@@ -43,6 +43,10 @@ func collectAddresses(rs []TfResource) map[string]string {
 		for j := range arn_names {
 			if val, ok := r.Values[arn_names[j]]; ok {
 				if arn, ok := val.(string); ok {
+					if arn == "" {
+						fmt.Printf("[warn] %s.%s is empty\n", r.Address, arn_names[j])
+						continue
+					}
 					d[arn] = addressNormalize(r.Address)
 				} else {
 					fmt.Printf("[warn] %s.%s should be string\n", r.Address, arn_names[j])
